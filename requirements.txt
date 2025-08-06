@@ -13,7 +13,7 @@ oauthlib==3.3.1
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 python-dotenv==1.1.1
-python-telegram-bot==22.3
+python-telegram-bot[webhooks]==22.3
 requests==2.32.4
 requests-oauthlib==2.0.0
 rsa==4.9.1
