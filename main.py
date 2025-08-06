@@ -1,3 +1,4 @@
+print("Bot is starting up...")
 import re
 import io
 import csv
