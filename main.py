@@ -7,6 +7,9 @@ import json
 import logging
 import os 
 
+from dotenv import load_dotenv # Dipertahankan untuk pengujian lokal
+load_dotenv() # Dipertahankan untuk pengujian lokal
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -20,19 +23,15 @@ from telegram.constants import ParseMode
 import gspread
 
 # --- Konfigurasi Bot Telegram ---
-# Mengambil TOKEN dari variabel lingkungan Heroku (BOT_TOKEN)
-# Pastikan Anda mengatur variabel lingkungan BOT_TOKEN di Heroku dengan token bot Anda yang sebenarnya.
+# Mengambil TOKEN dari variabel lingkungan Heroku (BOT_TOKEN) atau .env lokal
 TOKEN = os.getenv("BOT_TOKEN")
 
 
 # --- Konfigurasi Google Sheets ---
-# Perhatian: File kredensial JSON ini TIDAK BOLEH diunggah ke GitHub.
-# Anda akan menyalin isinya ke variabel lingkungan di Heroku.
-# Oleh karena itu, kita akan memuatnya dari variabel lingkungan di sini.
+# Ambil nama variabel lingkungan untuk kredensial JSON
 GOOGLE_SHEETS_CREDENTIALS_ENV_VAR = 'GOOGLE_CREDENTIALS_JSON'
 # Ganti ini dengan ID Spreadsheet Google Sheet Anda yang sebenarnya
-# Anda bisa menemukan ID ini di URL Google Sheet Anda (bagian antara /d/ dan /edit)
-GOOGLE_SHEET_ID = '12r1jh6kT8jZMbPye76aNvykINTujnOJJv8jY4oLXwPfs' # ID Spreadsheet Anda
+GOOGLE_SHEET_ID = '1U2hN1cckQ0zzQk7yFEDDyq6-y9SCJ8aM6Tm3MiQPA-w' # ID Spreadsheet Anda (diperbarui)
 WORKSHEET_NAME = '📋Transaksi' # Nama worksheet yang digunakan untuk transaksi
 
 # --- Konfigurasi Logging ---
@@ -50,11 +49,11 @@ def init_google_sheets():
     """Menginisialisasi koneksi ke Google Sheets menggunakan kredensial yang diberikan."""
     global gc, worksheet
     try:
-        # Ambil JSON kredensial dari environment variable Heroku
+        # Ambil JSON kredensial dari environment variable Heroku atau .env lokal
         credentials_json_str = os.getenv(GOOGLE_SHEETS_CREDENTIALS_ENV_VAR)
         if not credentials_json_str:
             logger.error(f"Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Tidak dapat terhubung ke Google Sheets.")
-            print(f"Error: Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Pastikan Anda mengaturnya di Heroku.")
+            print(f"Error: Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Pastikan Anda mengaturnya di Heroku atau file .env.")
             return
 
         # Parsing string JSON menjadi dictionary
@@ -77,7 +76,7 @@ def init_google_sheets():
         worksheet = None
     except Exception as e:
         logger.error(f"Gagal terhubung ke Google Sheets: {e}", exc_info=True)
-        logger.warning(f"Pastikan:\n1. Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' di Heroku berisi JSON kredensial yang valid.\n2. ID Google Sheet ('{GOOGLE_SHEET_ID}') dan nama tab/worksheet ('{WORKSHEET_NAME}') di kode sudah sama persis dengan di Google Sheets.\n3. Email service account Anda (dari file JSON) sudah dibagikan ke Google Sheet dengan akses 'Editor'.")
+        logger.warning(f"Pastikan:\n1. Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' di Heroku (atau .env lokal) berisi JSON kredensial yang valid.\n2. ID Google Sheet ('{GOOGLE_SHEET_ID}') dan nama tab/worksheet ('{WORKSHEET_NAME}') di kode sudah sama persis dengan di Google Sheets.\n3. Email service account Anda (dari file JSON) sudah dibagikan ke Google Sheet dengan akses 'Editor'.")
         gc = None
         worksheet = None
 
@@ -85,7 +84,7 @@ def init_google_sheets():
 MAIN_CATEGORIES = ['Penghasilan', 'Pengeluaran', 'Tagihan', 'Hutang', 'Investasi']
 
 PENGHASILAN_SUB_CATEGORIES = [
-    'Gaji', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain' # 'Gaji dan Tunjangan' diubah jadi 'Gaji' agar lebih ringkas
+    'Gaji', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain'
 ]
 
 PENGELUARAN_SUB_CATEGORIES = [
@@ -1362,10 +1361,8 @@ async def echo(update: Update, context):
 def main():
     """Fungsi utama untuk mengatur dan menjalankan bot."""
 
-    # Inisialisasi koneksi Google Sheets saat aplikasi dimulai
     init_google_sheets()
 
-    # Buat aplikasi Telegram bot
     application = Application.builder().token(TOKEN).build()
 
     # Conversation Handler untuk menambahkan transaksi
@@ -1425,7 +1422,7 @@ def main():
     application.add_handler(CommandHandler("ringkasan_minggu", ringkasan_minggu))
     application.add_handler(CommandHandler("ringkasan_bulan", ringkasan_bulan))
     application.add_handler(CommandHandler("export_data", export_data))
-    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan)) # Tambahkan handler ini
+    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan)) 
     application.add_handler(CommandHandler("help", help_command))
 
     # Echo untuk pesan yang tidak dikenali
@@ -1435,7 +1432,8 @@ def main():
     # --- Bagian Deployment Heroku ---
     # Mendapatkan port dari variabel lingkungan Heroku
     PORT = int(os.environ.get("PORT", 8443))
-    HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME") # Nama aplikasi Heroku Anda
+    # Anda perlu mengatur variabel lingkungan HEROKU_APP_NAME di Heroku dengan nama aplikasi Heroku Anda.
+    HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME") 
 
     if HEROKU_APP_NAME:
         # Jalankan bot menggunakan webhook untuk Heroku
@@ -1443,8 +1441,8 @@ def main():
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TOKEN,
-            webhook_url=f"https://{HEROKU_APP_NAME}[.herokuapp.com/](https://.herokuapp.com/){TOKEN}"
+            url_path=TOKEN, # url_path harus sama dengan TOKEN bot Anda
+            webhook_url=f"https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}"
         )
     else:
         # Jalankan bot dalam mode polling untuk pengujian lokal (jika HEROKU_APP_NAME tidak diatur)
