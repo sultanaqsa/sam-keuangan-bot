@@ -2,16 +2,13 @@ import re
 import io
 import csv
 import calendar
-from datetime import datetime, timedelta, date
-import json
+from datetime import datetime, timedelta, date # Import 'date' object
+import json # Tambahkan import json di sini
 import logging
 import os 
 
-from dotenv import load_dotenv # <-- Tambahkan baris ini
-load_dotenv() # <-- Tambahkan baris ini
-
 from telegram.ext import (
-    Application,
+    Application, # Menggunakan Application dari versi baru python-telegram-bot
     CommandHandler,
     MessageHandler,
     filters,
@@ -24,9 +21,8 @@ import gspread
 
 # --- Konfigurasi Bot Telegram ---
 # Mengambil TOKEN dari variabel lingkungan Heroku (BOT_TOKEN)
-# Pastikan Anda mengatur variabel lingkungan BOT_TOKEN di Heroku dengan token bot Anda yang sebenarnya.
 TOKEN = os.getenv("BOT_TOKEN")
-
+# Pastikan Anda mengatur variabel lingkungan BOT_TOKEN di Heroku dengan token bot Anda yang sebenarnya.
 
 # --- Konfigurasi Google Sheets ---
 # Perhatian: File kredensial JSON ini TIDAK BOLEH diunggah ke GitHub.
@@ -53,7 +49,7 @@ def init_google_sheets():
     """Menginisialisasi koneksi ke Google Sheets menggunakan kredensial yang diberikan."""
     global gc, worksheet
     try:
-        # Ambil JSON kredensial dari environment variable Heroku
+        # Ambil JSON kredensial dari environment variable
         credentials_json_str = os.getenv(GOOGLE_SHEETS_CREDENTIALS_ENV_VAR)
         if not credentials_json_str:
             logger.error(f"Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Tidak dapat terhubung ke Google Sheets.")
@@ -88,7 +84,7 @@ def init_google_sheets():
 MAIN_CATEGORIES = ['Penghasilan', 'Pengeluaran', 'Tagihan', 'Hutang', 'Investasi']
 
 PENGHASILAN_SUB_CATEGORIES = [
-    'Gaji dan Tunjangan', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain' # 'Gaji dan Tunjangan' diubah jadi 'Gaji' agar lebih ringkas
+    'Gaji dan Tunjangan', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain'
 ]
 
 PENGELUARAN_SUB_CATEGORIES = [
@@ -117,8 +113,8 @@ INVESTASI_SUB_CATEGORIES = [
 ]
 
 POSISI_KAS_OPTIONS = [
-    'Bank BCA (1334)', 'Tunai', 'Bank Mandiri (7221)', 'Bank BRI (1221)',
-    'Bank BNI (1128)', 'SeaBank (1134)', 'OVO', 'GoPay', 'Dana', 'Lain-lain'
+    'Bank BCA ', 'Tunai', 'Bank Mandiri ', 'Bank BRI ',
+    'Bank BNI ', 'SeaBank ', 'OVO', 'GoPay', 'Dana', 'Lain-lain'
 ]
 
 # --- States untuk ConversationHandler ---
@@ -463,6 +459,7 @@ async def cancel(update: Update, context):
     context.user_data.clear()
     return ConversationHandler.END
 
+# --- FUNGSI RINGKASAN ---
 async def ringkasan_hari(update: Update, context):
     """Menampilkan ringkasan pemasukan dan pengeluaran untuk hari ini."""
     user_id = update.effective_user.id
@@ -1367,6 +1364,12 @@ def main():
 
     init_google_sheets()
 
+    # Pastikan TOKEN sudah diambil dari variabel lingkungan
+    if not TOKEN:
+        logger.error("BOT_TOKEN environment variable not set. Bot cannot start.")
+        print("Error: BOT_TOKEN environment variable not set. Please set it on Heroku.")
+        return
+
     application = Application.builder().token(TOKEN).build()
 
     # Conversation Handler untuk menambahkan transaksi
@@ -1400,7 +1403,7 @@ def main():
             EDIT_CHOOSING_FIELD: [CallbackQueryHandler(edit_transaksi_choose_field)],
             EDIT_ASKING_NEW_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_get_new_value),
-                CallbackQueryHandler(edit_transaksi_get_new_value, pattern=r'^edit_new_value_.*') 
+                CallbackQueryHandler(edit_transaksi_get_new_value) 
             ],
             EDIT_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_confirm)],
         },
@@ -1411,12 +1414,11 @@ def main():
     conv_reset_data_handler = ConversationHandler(
         entry_points=[CommandHandler("reset_data", reset_data_start)],
         states={
-            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm, pattern=r'^reset_data_confirm_.*')],
+            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Menambahkan handlers ke aplikasi
     application.add_handler(conv_add_handler)
     application.add_handler(conv_delete_handler) 
     application.add_handler(conv_edit_handler) 
@@ -1425,32 +1427,39 @@ def main():
     application.add_handler(CommandHandler("ringkasan_hari", ringkasan_hari))
     application.add_handler(CommandHandler("ringkasan_minggu", ringkasan_minggu))
     application.add_handler(CommandHandler("ringkasan_bulan", ringkasan_bulan))
+    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan))
+
     application.add_handler(CommandHandler("export_data", export_data))
-    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan)) # Tambahkan handler ini
+    
     application.add_handler(CommandHandler("help", help_command))
 
-    # Echo untuk pesan yang tidak dikenali
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
+    # --- Konfigurasi Webhook untuk Deployment Heroku ---
+    # Ambil PORT dari variabel lingkungan Heroku
+    # Heroku akan menyediakan PORT secara otomatis
+    port = int(os.environ.get('PORT', 8443))
 
-    # --- Bagian Deployment Heroku ---
-    # Mendapatkan port dari variabel lingkungan Heroku
-    PORT = int(os.environ.get("PORT", 8443))
-    HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME") # Nama aplikasi Heroku Anda
-
-    if HEROKU_APP_NAME:
-        # Jalankan bot menggunakan webhook untuk Heroku
-        logger.info(f"Menjalankan bot dalam mode webhook di Heroku: {HEROKU_APP_NAME}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TOKEN,
-            webhook_url=f"https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}" # PERBAIKAN: Pastikan ini tidak ada kurung kurawal ekstra!
-        )
-    else:
-        # Jalankan bot dalam mode polling untuk pengujian lokal (jika HEROKU_APP_NAME tidak diatur)
-        logger.info("Menjalankan bot dalam mode polling. Ini hanya untuk pengujian lokal atau jika HEROKU_APP_NAME tidak diatur.")
+    # Ganti 'sam-keuangan-bot' dengan NAMA APLIKASI HEROKU Anda yang sebenarnya
+    # (Nama yang Anda buat di Heroku, yaitu 'sam-keuangan-bot')
+    heroku_app_name = os.environ.get("HEROKU_APP_NAME")
+    if not heroku_app_name:
+        logger.error("HEROKU_APP_NAME environment variable not set. Bot cannot set webhook.")
+        print("Error: HEROKU_APP_NAME environment variable not set. Please set it on Heroku.")
+        # Fallback to polling for local testing if HEROKU_APP_NAME is not set
         application.run_polling(allowed_updates=Update.ALL_TYPES)
+        return
+
+
+    webhook_url = f"https://{heroku_app_name}.herokuapp.com/{TOKEN}" # Menggunakan f-string untuk HEROKU_APP_NAME
+    
+
+    logger.info(f"Bot sedang berjalan dengan webhook di {webhook_url}...")
+    application.run_webhook(listen="0.0.0.0",
+                            port=port,
+                            url_path=TOKEN, # Ini harus sesuai dengan url_path di webhook_url
+                            webhook_url=webhook_url)
+    application.idle() # Ini akan menjaga bot tetap berjalan
 
 if __name__ == "__main__":
     main()
