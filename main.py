@@ -1,20 +1,11 @@
-print("Bot is starting up...")
 import re
 import io
 import csv
 import calendar
-from datetime import datetime, timedelta, date # Import 'date' object
-
+from datetime import datetime, timedelta, date
+import json
 import logging
 import os 
-import json # Tambahkan untuk membaca kredensial JSON dari variabel lingkungan
-
-# Tambahkan import ini untuk membaca file .env secara lokal
-from dotenv import load_dotenv 
-
-# --- PENTING: Muat variabel lingkungan dari file .env (untuk pengembangan lokal) ---
-# Ini harus dipanggil di awal skrip agar os.getenv dapat membaca variabel dari file .env
-load_dotenv()
 
 from telegram.ext import (
     Application,
@@ -28,35 +19,28 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 import gspread
 
+# --- Konfigurasi Bot Telegram ---
+# Mengambil TOKEN dari variabel lingkungan Heroku (BOT_TOKEN)
+# Pastikan Anda mengatur variabel lingkungan BOT_TOKEN di Heroku dengan token bot Anda yang sebenarnya.
+TOKEN = os.getenv("BOT_TOKEN")
+
+
+# --- Konfigurasi Google Sheets ---
+# Perhatian: File kredensial JSON ini TIDAK BOLEH diunggah ke GitHub.
+# Anda akan menyalin isinya ke variabel lingkungan di Heroku.
+# Oleh karena itu, kita akan memuatnya dari variabel lingkungan di sini.
+GOOGLE_SHEETS_CREDENTIALS_ENV_VAR = 'GOOGLE_CREDENTIALS_JSON'
+# Ganti ini dengan ID Spreadsheet Google Sheet Anda yang sebenarnya
+# Anda bisa menemukan ID ini di URL Google Sheet Anda (bagian antara /d/ dan /edit)
+GOOGLE_SHEET_ID = '12r1jh6kT8jZMbPye76aNvykINTujnOJJv8jY4oLXwPfs' # ID Spreadsheet Anda
+WORKSHEET_NAME = '📋Transaksi' # Nama worksheet yang digunakan untuk transaksi
+
 # --- Konfigurasi Logging ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# --- Variabel Lingkungan ---
-# TOKEN bot Telegram Anda. Ini akan dibaca dari variabel lingkungan (sistem atau dari .env).
-# PASTIKAN Anda mengatur variabel TELEGRAM_TOKEN di Heroku Config Vars atau di file .env.
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TOKEN:
-    logger.error("Variabel lingkungan TELEGRAM_TOKEN tidak ditemukan. Bot tidak dapat dimulai.")
-    # Jika tidak ada token, bot tidak bisa jalan, jadi raise error
-    raise ValueError("TELEGRAM_TOKEN environment variable not set.")
-
-# Nama aplikasi Heroku Anda. Ini akan dibaca dari variabel lingkungan (sistem atau dari .env).
-# PASTIKAN Anda mengatur variabel HEROKU_APP_NAME di Heroku Config Vars.
-# Untuk pengembangan lokal dengan polling, variabel ini harus KOSONG atau TIDAK ADA di .env.
-HEROKU_APP_NAME = os.getenv("HEROKU_APP_NAME")
-
-# Kredensial Google Sheets. Sekarang dibaca sebagai JSON string tunggal.
-GSPREAD_CREDENTIALS_JSON = os.getenv("GSPREAD_CREDENTIALS_JSON")
-
-
-# Ganti ini dengan ID Spreadsheet Google Sheet Anda yang sebenarnya
-# Anda bisa menemukan ID ini di URL Google Sheet Anda (bagian antara /d/ dan /edit)
-GOOGLE_SHEET_ID = '1U2hN1cckQ0zzQk7yFEDDyq6-y9SCJ8aM6Tm3MiQPA-w' # ID Spreadsheet Anda
-WORKSHEET_NAME = '📋Transaksi' # Nama worksheet yang digunakan untuk transaksi
 
 # --- Inisialisasi Google Sheets Client ---
 gc = None
@@ -66,52 +50,15 @@ def init_google_sheets():
     """Menginisialisasi koneksi ke Google Sheets menggunakan kredensial yang diberikan."""
     global gc, worksheet
     try:
-        if not GSPREAD_CREDENTIALS_JSON:
-            logger.error("Variabel lingkungan GSPREAD_CREDENTIALS_JSON tidak ditemukan. Tidak dapat terhubung ke Google Sheets.")
-            logger.warning("Pastikan GSPREAD_CREDENTIALS_JSON diatur di file .env (lokal) atau Heroku Config Vars.")
+        # Ambil JSON kredensial dari environment variable Heroku
+        credentials_json_str = os.getenv(GOOGLE_SHEETS_CREDENTIALS_ENV_VAR)
+        if not credentials_json_str:
+            logger.error(f"Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Tidak dapat terhubung ke Google Sheets.")
+            print(f"Error: Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Pastikan Anda mengaturnya di Heroku.")
             return
 
-        # Parse JSON string menjadi dictionary
-        credentials_info = json.loads(GSPREAD_CREDENTIALS_JSON)
-        
-        # Ambil kunci pribadi dari dictionary yang sudah diparse
-        private_key_raw_from_env = credentials_info.get("private_key")
-        if not private_key_raw_from_env:
-            logger.error("Kunci pribadi ('private_key') tidak ditemukan dalam GSPREAD_CREDENTIALS_JSON. Tidak dapat terhubung ke Google Sheets.")
-            return
-
-        # Bersihkan string private_key:
-        # 1. Ganti '\\n' (jika dotenv tidak mengonversinya) dengan '\n' yang sebenarnya.
-        # 2. Gunakan regex untuk mengekstrak konten Base64 dengan aman.
-        
-        private_key_with_actual_newlines = private_key_raw_from_env.replace('\\n', '\n')
-        
-        # Regex untuk mengekstrak konten antara BEGIN dan END PRIVATE KEY
-        # re.DOTALL memungkinkan '.' untuk mencocokkan newline juga
-        # \s* di sekitar (.*?) untuk menangani spasi putih di awal/akhir konten base64
-        match = re.search(r'-----BEGIN PRIVATE KEY-----\s*(.*?)\s*-----END PRIVATE KEY-----', private_key_with_actual_newlines, re.DOTALL)
-        
-        private_key_cleaned = ""
-        if match:
-            base64_content = match.group(1)
-            # Hapus semua spasi putih (termasuk newline) dari konten base64
-            base64_content_no_whitespace = "".join(base64_content.split())
-            
-            # Bangun kembali string dengan header, data Base64 yang sudah dibersihkan, dan footer
-            # Pastikan tidak ada karakter tambahan setelah footer
-            private_key_cleaned = "-----BEGIN PRIVATE KEY-----\n" + base64_content_no_whitespace + "\n-----END PRIVATE KEY-----"
-        else:
-            # Fallback jika marker tidak ditemukan atau formatnya salah
-            logger.warning("PEM markers not found or malformed in private key. Using a simpler cleaning method.")
-            # Ini mungkin masih gagal jika ada karakter yang tidak diinginkan, tetapi ini adalah upaya terakhir
-            private_key_cleaned = private_key_raw_from_env.replace('\\n', '\n').strip()
-
-        logger.info(f"DEBUG: Private key setelah upaya pembersihan (100 karakter pertama): {private_key_cleaned[:100]}...")
-        logger.info(f"DEBUG: Panjang private key setelah pembersihan: {len(private_key_cleaned)}")
-        
-        # Perbarui private_key di dictionary credentials_info dengan versi yang sudah dibersihkan
-        credentials_info["private_key"] = private_key_cleaned
-        
+        # Parsing string JSON menjadi dictionary
+        credentials_info = json.loads(credentials_json_str)
         gc = gspread.service_account_from_dict(credentials_info)
         
         spreadsheet = gc.open_by_key(GOOGLE_SHEET_ID)
@@ -120,10 +67,6 @@ def init_google_sheets():
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME) 
         logger.info(f"Berhasil terhubung ke Google Sheet dengan ID: '{GOOGLE_SHEET_ID}', Worksheet: '{WORKSHEET_NAME}'")
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Gagal memparsing GSPREAD_CREDENTIALS_JSON: {e}. Pastikan format JSON valid.")
-        gc = None
-        worksheet = None
     except gspread.exceptions.SpreadsheetNotFound:
         logger.error(f"Spreadsheet Google Sheets tidak ditemukan dengan ID: '{GOOGLE_SHEET_ID}'. Pastikan ID sudah benar dan bot memiliki akses.")
         gc = None
@@ -134,7 +77,7 @@ def init_google_sheets():
         worksheet = None
     except Exception as e:
         logger.error(f"Gagal terhubung ke Google Sheets: {e}", exc_info=True)
-        logger.warning(f"Pastikan:\n1. Variabel lingkungan 'GSPREAD_CREDENTIALS_JSON' di file .env (lokal) atau Heroku Config Vars sudah benar dan dalam format JSON yang valid.\n2. ID Google Sheet ('{GOOGLE_SHEET_ID}') dan nama tab/worksheet ('{WORKSHEET_NAME}') di kode sudah sama persis dengan di Google Sheets.\n3. Email service account Anda (dari file JSON) sudah dibagikan ke Google Sheet dengan akses 'Editor'.")
+        logger.warning(f"Pastikan:\n1. Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' di Heroku berisi JSON kredensial yang valid.\n2. ID Google Sheet ('{GOOGLE_SHEET_ID}') dan nama tab/worksheet ('{WORKSHEET_NAME}') di kode sudah sama persis dengan di Google Sheets.\n3. Email service account Anda (dari file JSON) sudah dibagikan ke Google Sheet dengan akses 'Editor'.")
         gc = None
         worksheet = None
 
@@ -142,7 +85,7 @@ def init_google_sheets():
 MAIN_CATEGORIES = ['Penghasilan', 'Pengeluaran', 'Tagihan', 'Hutang', 'Investasi']
 
 PENGHASILAN_SUB_CATEGORIES = [
-    'Gaji dan Tunjangan', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain'
+    'Gaji', 'Bisnis', 'Sampingan', 'Dividen', 'Bunga', 'Komisi', 'Lain-lain' # 'Gaji dan Tunjangan' diubah jadi 'Gaji' agar lebih ringkas
 ]
 
 PENGELUARAN_SUB_CATEGORIES = [
@@ -171,8 +114,8 @@ INVESTASI_SUB_CATEGORIES = [
 ]
 
 POSISI_KAS_OPTIONS = [
-    'Bank BCA ', 'Tunai', 'Bank Mandiri ', 'Bank BRI ',
-    'Bank BNI ', 'SeaBank ', 'BSG', 'OVO', 'Dana', 'Lain-lain'
+    'Bank BCA (1334)', 'Tunai', 'Bank Mandiri (7221)', 'Bank BRI (1221)',
+    'Bank BNI (1128)', 'SeaBank (1134)', 'OVO', 'GoPay', 'Dana', 'Lain-lain'
 ]
 
 # --- States untuk ConversationHandler ---
@@ -1138,19 +1081,15 @@ async def edit_transaksi_confirm(update: Update, context):
                 elif field_to_edit == 'UANG MASUK': 
                     uang_keluar_col_idx_1based = header_to_col_index.get('UANG KELUAR', -1) + 1 
                     if uang_keluar_col_idx_1based > 0:
-                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, new_value) # Perbaiki ini
                         worksheet.update_cell(row_index, uang_keluar_col_idx_1based, 0)
-                    else:
-                        worksheet.update_cell(row_index, col_index_1based, new_value) # Jika UANG KELUAR tidak ada
+                    worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Masuk diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
 
                 elif field_to_edit == 'UANG KELUAR': 
                     uang_masuk_col_idx_1based = header_to_col_index.get('UANG MASUK', -1) + 1 
                     if uang_masuk_col_idx_1based > 0:
                         worksheet.update_cell(row_index, uang_masuk_col_idx_1based, 0)
-                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, new_value) # Perbaiki ini
-                    else:
-                        worksheet.update_cell(row_index, col_index_1based, new_value) # Jika UANG MASUK tidak ada
+                    worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Keluar diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
                 
                 else:
@@ -1423,8 +1362,10 @@ async def echo(update: Update, context):
 def main():
     """Fungsi utama untuk mengatur dan menjalankan bot."""
 
+    # Inisialisasi koneksi Google Sheets saat aplikasi dimulai
     init_google_sheets()
 
+    # Buat aplikasi Telegram bot
     application = Application.builder().token(TOKEN).build()
 
     # Conversation Handler untuk menambahkan transaksi
@@ -1458,7 +1399,7 @@ def main():
             EDIT_CHOOSING_FIELD: [CallbackQueryHandler(edit_transaksi_choose_field)],
             EDIT_ASKING_NEW_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_get_new_value),
-                CallbackQueryHandler(edit_transaksi_get_new_value) 
+                CallbackQueryHandler(edit_transaksi_get_new_value, pattern=r'^edit_new_value_.*') 
             ],
             EDIT_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_confirm)],
         },
@@ -1469,11 +1410,12 @@ def main():
     conv_reset_data_handler = ConversationHandler(
         entry_points=[CommandHandler("reset_data", reset_data_start)],
         states={
-            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm)],
+            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm, pattern=r'^reset_data_confirm_.*')],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    # Menambahkan handlers ke aplikasi
     application.add_handler(conv_add_handler)
     application.add_handler(conv_delete_handler) 
     application.add_handler(conv_edit_handler) 
@@ -1482,33 +1424,32 @@ def main():
     application.add_handler(CommandHandler("ringkasan_hari", ringkasan_hari))
     application.add_handler(CommandHandler("ringkasan_minggu", ringkasan_minggu))
     application.add_handler(CommandHandler("ringkasan_bulan", ringkasan_bulan))
-    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan))
-
     application.add_handler(CommandHandler("export_data", export_data))
-    
+    application.add_handler(CommandHandler("rangkuman_keuangan", rangkuman_keuangan)) # Tambahkan handler ini
     application.add_handler(CommandHandler("help", help_command))
 
+    # Echo untuk pesan yang tidak dikenali
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    logger.info("Bot sedang berjalan...")
-    
-    # --- Logika Deployment Heroku vs. Lokal ---
-    if HEROKU_APP_NAME:
-        # Mode deployment Heroku (menggunakan webhook)
-        PORT = int(os.environ.get("PORT", 8443)) # Heroku akan memberikan port ini
-        WEBHOOK_URL = f"https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}"
 
-        logger.info(f"Starting bot in webhook mode. Listening on port {PORT}, URL: {WEBHOOK_URL}")
+    # --- Bagian Deployment Heroku ---
+    # Mendapatkan port dari variabel lingkungan Heroku
+    PORT = int(os.environ.get("PORT", 8443))
+    HEROKU_APP_NAME = os.environ.get("HEROKU_APP_NAME") # Nama aplikasi Heroku Anda
+
+    if HEROKU_APP_NAME:
+        # Jalankan bot menggunakan webhook untuk Heroku
+        logger.info(f"Menjalankan bot dalam mode webhook di Heroku: {HEROKU_APP_NAME}")
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TOKEN, # url_path harus sama dengan token bot untuk keamanan
-            webhook_url=WEBHOOK_URL
+            url_path=TOKEN,
+            webhook_url=f"https://{HEROKU_APP_NAME}[.herokuapp.com/](https://.herokuapp.com/){TOKEN}"
         )
     else:
-        # Mode lokal (untuk pengujian)
-        logger.info("Starting bot in polling mode (local development).")
-        application.run_polling(poll_interval=3, allowed_updates=Update.ALL_TYPES)
+        # Jalankan bot dalam mode polling untuk pengujian lokal (jika HEROKU_APP_NAME tidak diatur)
+        logger.info("Menjalankan bot dalam mode polling. Ini hanya untuk pengujian lokal atau jika HEROKU_APP_NAME tidak diatur.")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
