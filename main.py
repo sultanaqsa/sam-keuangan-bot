@@ -1081,15 +1081,19 @@ async def edit_transaksi_confirm(update: Update, context):
                 elif field_to_edit == 'UANG MASUK': 
                     uang_keluar_col_idx_1based = header_to_col_index.get('UANG KELUAR', -1) + 1 
                     if uang_keluar_col_idx_1based > 0:
-                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, 0)
-                    worksheet.update_cell(row_index, col_index_1based, new_value)
+                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, new_value)
+                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, 0) # Set UANG KELUAR to 0
+                    else:
+                        worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Masuk diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
 
                 elif field_to_edit == 'UANG KELUAR': 
                     uang_masuk_col_idx_1based = header_to_col_index.get('UANG MASUK', -1) + 1 
                     if uang_masuk_col_idx_1based > 0:
-                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, 0)
-                    worksheet.update_cell(row_index, col_index_1based, new_value)
+                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, 0) # Set UANG MASUK to 0
+                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, new_value)
+                    else:
+                        worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Keluar diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
                 
                 else:
@@ -1450,14 +1454,15 @@ def main():
         application.run_polling(allowed_updates=Update.ALL_TYPES)
         return
 
-
-    webhook_url = f"https://{heroku_app_name}.herokuapp.com/{TOKEN}" # Menggunakan f-string untuk HEROKU_APP_NAME
+    # Menggunakan jalur 'bot' yang lebih sederhana untuk webhook_url dan url_path
+    webhook_url_path = "bot" 
+    webhook_url = f"https://{heroku_app_name}.herokuapp.com/{webhook_url_path}" 
     
 
     logger.info(f"Bot sedang berjalan dengan webhook di {webhook_url}...")
     application.run_webhook(listen="0.0.0.0",
                             port=port,
-                            url_path=TOKEN, # Ini harus sesuai dengan url_path di webhook_url
+                            url_path=webhook_url_path, 
                             webhook_url=webhook_url)
     application.idle() # Ini akan menjaga bot tetap berjalan
 
