@@ -1434,51 +1434,49 @@ def setup_all_handlers(application: Application):
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
 
-def main():
+def create_heroku_app():
     """
-    Fungsi utama untuk mengatur aplikasi bot Telegram.
-    Ketika dipanggil oleh Gunicorn (di Heroku), ini akan mengembalikan objek WSGI.
+    Fungsi untuk membuat dan mengonfigurasi objek Application untuk deployment Heroku.
+    Ini dipanggil saat `main.py` diimpor oleh Gunicorn.
     """
     init_google_sheets() # Inisialisasi koneksi Google Sheets
 
     if not TOKEN:
-        logger.error("BOT_TOKEN environment variable not set. Bot cannot start.")
-        # Di lingkungan Heroku, ini akan menyebabkan aplikasi crash jika token tidak ada, yang memang diharapkan.
-        raise ValueError("BOT_TOKEN environment variable is missing.")
+        logger.error("BOT_TOKEN environment variable not set. Cannot start bot for Heroku.")
+        raise ValueError("BOT_TOKEN environment variable is missing for Heroku deployment.")
 
     application = Application.builder().token(TOKEN).build()
     setup_all_handlers(application) # Panggil fungsi helper untuk menyiapkan handler
 
     # --- Konfigurasi Webhook untuk Deployment Heroku ---
-    # Ambil PORT dari variabel lingkungan Heroku
     port = int(os.environ.get('PORT', 8443))
     heroku_app_name = os.environ.get("HEROKU_APP_NAME")
-    webhook_url_path = "bot" # Jalur yang lebih sederhana, konsisten
+    webhook_url_path = "bot" 
 
-    # Logika ini HANYA untuk Gunicorn yang memanggil main() di Heroku
     if not heroku_app_name:
-        # Jika main() dipanggil tanpa HEROKU_APP_NAME (yang seharusnya tidak terjadi di Gunicorn),
-        # berarti ada miskonfigurasi atau panggilan langsung yang tidak sesuai harapan Gunicorn.
-        # Kita akan raise error agar Gunicorn tidak memulai aplikasi yang salah.
-        logger.error("main() function called by Gunicorn, but HEROKU_APP_NAME is not set. Cannot configure webhook.")
+        # Ini seharusnya tidak tercapai jika Gunicorn memanggil create_heroku_app()
+        logger.error("create_heroku_app() called but HEROKU_APP_NAME not set. Miskonfiguration.")
         raise ValueError("HEROKU_APP_NAME must be set when running with Gunicorn.")
     
     webhook_url = f"https://{heroku_app_name}.herokuapp.com/{webhook_url_path}" 
 
     logger.info(f"Aplikasi dikonfigurasi untuk webhook di {webhook_url}")
     
-    # Configure webhook properties on the application instance
-    application.updater = None # Penting untuk mode webhook (tidak menggunakan polling internal)
+    application.updater = None 
     application.webhook_url = webhook_url
     application.webhook_listen = "0.0.0.0"
     application.webhook_port = port
     application.webhook_url_path = webhook_url_path
     
-    # Ini adalah objek WSGI yang akan dilayani oleh Gunicorn
     wsgi_app = application.get_webhook_bot().web_app
 
     logger.info("Application configured for webhook. Returning WSGI app for Gunicorn.")
-    return wsgi_app # Kembalikan aplikasi WSGI
+    return wsgi_app 
+
+# Variabel `main_app` didefinisikan di level modul agar Gunicorn dapat menemukannya saat mengimpor `main.py`
+# Ini akan dieksekusi saat Heroku mengimpor `main.py`
+main_app = create_heroku_app()
+
 
 # Ini adalah bagian yang akan dipanggil saat skrip dijalankan secara langsung (misalnya, untuk pengujian lokal).
 if __name__ == "__main__":
@@ -1486,10 +1484,8 @@ if __name__ == "__main__":
     if not os.environ.get("HEROKU_APP_NAME"):
         logger.info("Running in local polling mode (HEROKU_APP_NAME not set).")
         
-        # Pastikan kredensial Google Sheets diinisialisasi untuk lingkungan lokal juga
-        init_google_sheets() 
+        init_google_sheets() # Pastikan kredensial Google Sheets diinisialisasi untuk lingkungan lokal juga
 
-        # Pastikan TOKEN sudah ada untuk eksekusi lokal
         if not TOKEN:
             logger.error("BOT_TOKEN environment variable not set for local polling. Bot cannot start.")
             print("Error: Variabel lingkungan 'BOT_TOKEN' tidak ditemukan. Harap atur secara lokal sebelum menjalankan.")
@@ -1502,8 +1498,7 @@ if __name__ == "__main__":
         logger.info("Starting local polling...")
         local_application.run_polling(allowed_updates=Update.ALL_TYPES)
     else:
-        # Ini adalah jalur untuk Gunicorn di Heroku.
-        # Gunicorn akan memanggil fungsi `main()` di atas,
-        # yang akan mengembalikan WSGI callable (`main_app`).
-        logger.info("Preparing WSGI app for Gunicorn on Heroku (calling main()).")
-        main_app = main() # main_app akan menjadi WSGI callable yang siap dilayani Gunicorn
+        # Jalur ini tidak lagi memanggil main() secara langsung karena main_app sudah didefinisikan di atas.
+        # Ini hanya untuk tujuan logging agar kita tahu bahwa skrip ini dieksekusi sebagai bagian dari proses Gunicorn.
+        logger.info("This script is being imported by Gunicorn on Heroku. `main_app` is already defined.")
+        # Tidak ada tindakan lebih lanjut yang diperlukan di sini.
