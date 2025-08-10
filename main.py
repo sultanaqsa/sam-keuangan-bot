@@ -53,7 +53,8 @@ def init_google_sheets():
         credentials_json_str = os.getenv(GOOGLE_SHEETS_CREDENTIALS_ENV_VAR)
         if not credentials_json_str:
             logger.error(f"Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Tidak dapat terhubung ke Google Sheets.")
-            print(f"Error: Variabel lingkungan '{GOOGLE_SHEETS_CREDENTIALS_ENV_VAR}' tidak ditemukan. Pastikan Anda mengaturnya di Heroku.")
+            # Dalam mode lokal, kita bisa print, tapi di Heroku ini akan masuk log
+            # Untuk skenario Heroku, ini akan mencegah bot berfungsi jika variabel tidak ada.
             return
 
         # Parsing string JSON menjadi dictionary
@@ -938,16 +939,20 @@ async def edit_transaksi_get_new_value(update: Update, context):
         query = update.callback_query
         await query.answer()
         parts = query.data.split('_')
+        # Check if the callback_data matches the expected pattern for new value selection
         if len(parts) >= 4 and parts[0] == 'edit' and parts[1] == 'new' and parts[2] == 'value':
             field_to_edit_from_callback = parts[3]
-            new_value_input = "_".join(parts[4:]) 
+            # Reconstruct the new value from remaining parts, handling spaces in option names
+            new_value_input = "_".join(parts[4:])
+            # Ensure context.user_data['field_to_edit'] is updated if coming from a callback
             context.user_data['field_to_edit'] = field_to_edit_from_callback 
-            field_to_edit = field_to_edit_from_callback
+            field_to_edit = field_to_edit_from_callback # Update local variable too
         else:
+            # Fallback for unexpected callback data
             await query.edit_message_text("Pilihan tidak valid. Silakan coba lagi atau ketik `cancel`.", parse_mode=ParseMode.MARKDOWN)
             return EDIT_ASKING_NEW_VALUE 
 
-    if new_value_input is None: 
+    if new_value_input is None: # This should ideally not happen if logic above is sound
         if update.callback_query:
             await update.callback_query.edit_message_text("Input tidak valid. Silakan coba lagi atau ketik `cancel`.", parse_mode=ParseMode.MARKDOWN)
         else:
@@ -1081,19 +1086,15 @@ async def edit_transaksi_confirm(update: Update, context):
                 elif field_to_edit == 'UANG MASUK': 
                     uang_keluar_col_idx_1based = header_to_col_index.get('UANG KELUAR', -1) + 1 
                     if uang_keluar_col_idx_1based > 0:
-                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, new_value)
-                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, 0) # Set UANG KELUAR to 0
-                    else:
-                        worksheet.update_cell(row_index, col_index_1based, new_value)
+                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, 0)
+                    worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Masuk diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
 
                 elif field_to_edit == 'UANG KELUAR': 
                     uang_masuk_col_idx_1based = header_to_col_index.get('UANG MASUK', -1) + 1 
                     if uang_masuk_col_idx_1based > 0:
-                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, 0) # Set UANG MASUK to 0
-                        worksheet.update_cell(row_index, uang_keluar_col_idx_1based, new_value)
-                    else:
-                        worksheet.update_cell(row_index, col_index_1based, new_value)
+                        worksheet.update_cell(row_index, uang_masuk_col_idx_1based, 0)
+                    worksheet.update_cell(row_index, col_index_1based, new_value)
                     await update.message.reply_text(f"Transaksi dengan ID `{transaction_id}` berhasil diupdate. Uang Keluar diubah menjadi *{format_rupiah(new_value)}*.", parse_mode=ParseMode.MARKDOWN)
                 
                 else:
@@ -1363,19 +1364,12 @@ async def echo(update: Update, context):
     """Mengulang kembali pesan teks yang diterima dari pengguna."""
     await update.message.reply_text(f"Anda bilang: {update.message.text}")
 
-def main():
-    """Fungsi utama untuk mengatur dan menjalankan bot."""
-
-    init_google_sheets()
-
-    # Pastikan TOKEN sudah diambil dari variabel lingkungan
-    if not TOKEN:
-        logger.error("BOT_TOKEN environment variable not set. Bot cannot start.")
-        print("Error: BOT_TOKEN environment variable not set. Please set it on Heroku.")
-        return
-
-    application = Application.builder().token(TOKEN).build()
-
+# Helper function to set up all handlers for a given Application instance
+def setup_all_handlers(application: Application):
+    """
+    Menyiapkan semua handler untuk objek Application yang diberikan.
+    Fungsi ini dipanggil baik saat menjalankan bot di Heroku maupun secara lokal.
+    """
     # Conversation Handler untuk menambahkan transaksi
     conv_add_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -1407,7 +1401,7 @@ def main():
             EDIT_CHOOSING_FIELD: [CallbackQueryHandler(edit_transaksi_choose_field)],
             EDIT_ASKING_NEW_VALUE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_get_new_value),
-                CallbackQueryHandler(edit_transaksi_get_new_value) 
+                CallbackQueryHandler(edit_transaksi_get_new_value, pattern=r'^edit_new_value_.*') # Added pattern for callbacks
             ],
             EDIT_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_transaksi_confirm)],
         },
@@ -1418,7 +1412,7 @@ def main():
     conv_reset_data_handler = ConversationHandler(
         entry_points=[CommandHandler("reset_data", reset_data_start)],
         states={
-            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm)],
+            RESET_DATA_CONFIRMATION: [CallbackQueryHandler(reset_data_confirm, pattern=r'^reset_data_confirm_.*')], # Added pattern
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -1439,32 +1433,77 @@ def main():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
+
+def main():
+    """
+    Fungsi utama untuk mengatur aplikasi bot Telegram.
+    Ketika dipanggil oleh Gunicorn (di Heroku), ini akan mengembalikan objek WSGI.
+    """
+    init_google_sheets() # Inisialisasi koneksi Google Sheets
+
+    if not TOKEN:
+        logger.error("BOT_TOKEN environment variable not set. Bot cannot start.")
+        # Di lingkungan Heroku, ini akan menyebabkan aplikasi crash jika token tidak ada, yang memang diharapkan.
+        raise ValueError("BOT_TOKEN environment variable is missing.")
+
+    application = Application.builder().token(TOKEN).build()
+    setup_all_handlers(application) # Panggil fungsi helper untuk menyiapkan handler
+
     # --- Konfigurasi Webhook untuk Deployment Heroku ---
     # Ambil PORT dari variabel lingkungan Heroku
-    # Heroku akan menyediakan PORT secara otomatis
     port = int(os.environ.get('PORT', 8443))
-
-    # Ganti 'sam-keuangan-bot' dengan NAMA APLIKASI HEROKU Anda yang sebenarnya
-    # (Nama yang Anda buat di Heroku, yaitu 'sam-keuangan-bot')
     heroku_app_name = os.environ.get("HEROKU_APP_NAME")
+    webhook_url_path = "bot" # Jalur yang lebih sederhana, konsisten
+
+    # Logika ini HANYA untuk Gunicorn yang memanggil main() di Heroku
     if not heroku_app_name:
-        logger.error("HEROKU_APP_NAME environment variable not set. Bot cannot set webhook.")
-        print("Error: HEROKU_APP_NAME environment variable not set. Please set it on Heroku.")
-        # Fallback to polling for local testing if HEROKU_APP_NAME is not set
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-        return
-
-    # Menggunakan jalur 'bot' yang lebih sederhana untuk webhook_url dan url_path
-    webhook_url_path = "bot" 
-    webhook_url = f"https://{heroku_app_name}.herokuapp.com/{webhook_url_path}" 
+        # Jika main() dipanggil tanpa HEROKU_APP_NAME (yang seharusnya tidak terjadi di Gunicorn),
+        # berarti ada miskonfigurasi atau panggilan langsung yang tidak sesuai harapan Gunicorn.
+        # Kita akan raise error agar Gunicorn tidak memulai aplikasi yang salah.
+        logger.error("main() function called by Gunicorn, but HEROKU_APP_NAME is not set. Cannot configure webhook.")
+        raise ValueError("HEROKU_APP_NAME must be set when running with Gunicorn.")
     
+    webhook_url = f"https://{heroku_app_name}.herokuapp.com/{webhook_url_path}" 
 
-    logger.info(f"Bot sedang berjalan dengan webhook di {webhook_url}...")
-    application.run_webhook(listen="0.0.0.0",
-                            port=port,
-                            url_path=webhook_url_path, 
-                            webhook_url=webhook_url)
-    application.idle() # Ini akan menjaga bot tetap berjalan
+    logger.info(f"Aplikasi dikonfigurasi untuk webhook di {webhook_url}")
+    
+    # Configure webhook properties on the application instance
+    application.updater = None # Penting untuk mode webhook (tidak menggunakan polling internal)
+    application.webhook_url = webhook_url
+    application.webhook_listen = "0.0.0.0"
+    application.webhook_port = port
+    application.webhook_url_path = webhook_url_path
+    
+    # Ini adalah objek WSGI yang akan dilayani oleh Gunicorn
+    wsgi_app = application.get_webhook_bot().web_app
 
+    logger.info("Application configured for webhook. Returning WSGI app for Gunicorn.")
+    return wsgi_app # Kembalikan aplikasi WSGI
+
+# Ini adalah bagian yang akan dipanggil saat skrip dijalankan secara langsung (misalnya, untuk pengujian lokal).
 if __name__ == "__main__":
-    main()
+    # Jika tidak ada HEROKU_APP_NAME (berarti kita berjalan secara lokal), jalankan dalam mode polling.
+    if not os.environ.get("HEROKU_APP_NAME"):
+        logger.info("Running in local polling mode (HEROKU_APP_NAME not set).")
+        
+        # Pastikan kredensial Google Sheets diinisialisasi untuk lingkungan lokal juga
+        init_google_sheets() 
+
+        # Pastikan TOKEN sudah ada untuk eksekusi lokal
+        if not TOKEN:
+            logger.error("BOT_TOKEN environment variable not set for local polling. Bot cannot start.")
+            print("Error: Variabel lingkungan 'BOT_TOKEN' tidak ditemukan. Harap atur secara lokal sebelum menjalankan.")
+            os._exit(1) # Keluar secara paksa jika token tidak ada
+
+        # Buat dan konfigurasikan instance Application untuk polling lokal
+        local_application = Application.builder().token(TOKEN).build()
+        setup_all_handlers(local_application) # Siapkan semua handler
+
+        logger.info("Starting local polling...")
+        local_application.run_polling(allowed_updates=Update.ALL_TYPES)
+    else:
+        # Ini adalah jalur untuk Gunicorn di Heroku.
+        # Gunicorn akan memanggil fungsi `main()` di atas,
+        # yang akan mengembalikan WSGI callable (`main_app`).
+        logger.info("Preparing WSGI app for Gunicorn on Heroku (calling main()).")
+        main_app = main() # main_app akan menjadi WSGI callable yang siap dilayani Gunicorn
